@@ -182,71 +182,70 @@ class MainActivity : Activity() {
     }
 
     private fun runAutofill() {
-        val w = webView ?: return
+        val w = webView
+        if (w == null) {
+            Toast.makeText(this, "TTD page is not open. Tap Open TTD Dashboard first.", Toast.LENGTH_LONG).show()
+            return
+        }
+        Toast.makeText(this, "Fill Form tapped. Checking TTD fields…", Toast.LENGTH_SHORT).show()
         val script = """
         (async function(){
+          const sleep = ms => new Promise(r => setTimeout(r, ms));
           try {
+            if (!window.AndroidAutofill) return "ERROR: Android bridge is unavailable on this page";
             const data = JSON.parse(AndroidAutofill.getData() || "{}");
-            const g = data.general || {};
-            const pilgrims = data.pilgrims || [];
-            const sleep = ms => new Promise(resolve => setTimeout(resolve, ms));
-            const all = name => Array.from(document.querySelectorAll("[name=\"" + name + "\"]"));
-            const setValue = (el, value) => {
-              if (!el || value == null || String(value).trim() === "" || el.disabled || !el.isConnected) return false;
-              const text = String(value).trim();
-              if (el instanceof HTMLSelectElement) {
-                const opt = Array.from(el.options).find(o => o.text.trim().toLowerCase() === text.toLowerCase() || o.value.trim().toLowerCase() === text.toLowerCase());
-                if (!opt) return false;
-                el.value = opt.value;
+            const general = data.general || {}, pilgrims = data.pilgrims || [];
+            const findAll = key => Array.from(document.querySelectorAll('[name="' + key + '"],[id="' + key + '"]'));
+            const setVal = (el,val) => {
+              if (!el || val == null || String(val).trim()==="" || el.disabled) return false;
+              const text=String(val).trim();
+              if (el.tagName==="SELECT") {
+                const opt=Array.from(el.options).find(o=>o.text.trim().toLowerCase()===text.toLowerCase() || o.value.trim().toLowerCase()===text.toLowerCase());
+                if(!opt) return false; el.value=opt.value;
               } else {
-                const proto = el instanceof HTMLTextAreaElement ? HTMLTextAreaElement.prototype : HTMLInputElement.prototype;
-                const setter = Object.getOwnPropertyDescriptor(proto, "value")?.set;
-                if (setter) setter.call(el, text); else el.value = text;
+                const proto=el instanceof HTMLTextAreaElement?HTMLTextAreaElement.prototype:HTMLInputElement.prototype;
+                const setter=Object.getOwnPropertyDescriptor(proto,"value")?.set;
+                if(setter) setter.call(el,text); else el.value=text;
               }
-              el.dispatchEvent(new Event("input", {bubbles:true}));
-              el.dispatchEvent(new Event("change", {bubbles:true}));
+              el.dispatchEvent(new Event("input",{bubbles:true})); el.dispatchEvent(new Event("change",{bubbles:true}));
               return true;
             };
-            let filled = 0;
-            for (const key of ["pilgrimEmail","pilgrimCity","pilgrimState","pilgrimCountry","pilgrimPincode"]) if (setValue(all(key)[0], g[key])) filled++;
-            async function chooseCustom(input, wanted) {
-              if (!input || !wanted) return false;
-              for (let n=0; n<20 && input.disabled; n++) await sleep(250);
-              if (input.disabled) return false;
-              input.click(); input.dispatchEvent(new MouseEvent("mousedown",{bubbles:true})); input.focus();
-              await sleep(400);
-              const target = String(wanted).trim().toLowerCase();
-              const option = Array.from(document.querySelectorAll("li,[role=option],option")).find(el => el.textContent.trim().toLowerCase() === target);
-              if (!option) return false;
-              option.click(); option.dispatchEvent(new MouseEvent("mouseup",{bubbles:true})); await sleep(300);
-              return String(input.value || "").trim().toLowerCase() === target;
+            let filled=0, seen=[];
+            for(const key of ["pilgrimEmail","pilgrimCity","pilgrimState","pilgrimCountry","pilgrimPincode"]) {
+              const els=findAll(key); if(els.length) seen.push(key+":"+els.length);
+              if(setVal(els[0],general[key])) filled++;
             }
-            const sectionNodes = Array.from(document.querySelectorAll("[class*=pilDetails_mainContainer], [class*=pilgrimDetails], [class*=pilgrim-details]"));
-            const groups = sectionNodes.filter(el => el.querySelector && el.querySelector("[name=\"name\"]"));
-            for (let i=0; i<Math.min(4,pilgrims.length); i++) {
-              const p = pilgrims[i] || {};
-              const nameNode = all("name")[i];
-              const scope = groups[i] || (nameNode ? (nameNode.closest("[class*=pilDetails_mainContainer], [class*=pilgrimDetails], [class*=pilgrim-details]") || nameNode.parentElement?.parentElement?.parentElement || document) : document);
-              for (const key of ["name","age"]) {
-                const nodes = scope === document ? all(key) : Array.from(scope.querySelectorAll("[name=\"" + key + "\"]"));
-                if (setValue(nodes[0] || all(key)[i], p[key])) filled++;
-              }
-              const genders = scope === document ? all("gender") : Array.from(scope.querySelectorAll("[name=\"gender\"]"));
-              if (await chooseCustom(genders[0] || all("gender")[i], p.gender)) filled++;
-              const types = scope === document ? all("idType") : Array.from(scope.querySelectorAll("[name=\"idType\"]"));
-              const idType = types[0] || all("idType")[i];
-              if (idType && idType.tagName === "SELECT" && setValue(idType,p.idType)) filled++;
-              else if (await chooseCustom(idType,p.idType)) filled++;
-              const numbers = scope === document ? all("idNumber") : Array.from(scope.querySelectorAll("[name=\"idNumber\"]"));
-              if (setValue(numbers[0] || all("idNumber")[i],p.idNumber)) filled++;
+            async function choose(el,val) {
+              if(!el || !val || el.disabled) return false;
+              el.click(); el.dispatchEvent(new MouseEvent("mousedown",{bubbles:true})); await sleep(350);
+              const wanted=String(val).trim().toLowerCase();
+              const opts=Array.from(document.querySelectorAll("li,[role=option],option"));
+              const opt=opts.find(x=>x.textContent.trim().toLowerCase()===wanted || x.textContent.trim().toLowerCase().includes(wanted));
+              if(!opt) return false;
+              opt.click(); opt.dispatchEvent(new MouseEvent("mouseup",{bubbles:true})); await sleep(250);
+              return String(el.value||"").trim().toLowerCase()===wanted;
             }
-            AndroidAutofill.notifyResult(filled ? ("Filled or selected " + filled + " field(s). Please review before continuing.") : "No matching fields found. Navigate to the actual TTD Pilgrim Details page, wait for it to load, then tap Fill Form again.");
-          } catch (e) { AndroidAutofill.notifyResult("Fill Form error: " + String(e)); }
-        })();
+            for(let i=0;i<Math.min(4,pilgrims.length);i++){
+              const p=pilgrims[i]||{};
+              for(const key of ["name","age","gender","idType","idNumber"]) { const els=findAll(key); if(els.length) seen.push(key+":"+els.length); }
+              const names=findAll("name"), ages=findAll("age"), genders=findAll("gender"), types=findAll("idType"), numbers=findAll("idNumber");
+              if(setVal(names[i],p.name)) filled++; if(setVal(ages[i],p.age)) filled++;
+              if(await choose(genders[i],p.gender)) filled++;
+              if(types[i] && types[i].tagName==="SELECT") { if(setVal(types[i],p.idType)) filled++; } else if(await choose(types[i],p.idType)) filled++;
+              if(setVal(numbers[i],p.idNumber)) filled++;
+            }
+            const message=filled ? "Filled/selected "+filled+" field(s). Check details before continuing." : "Found no fillable matching fields. Fields detected: "+(seen.join(", ")||"none")+". TTD may use different IDs or a separate frame."; 
+            AndroidAutofill.notifyResult(message); return message;
+          } catch(e) { const msg="Fill Form error: "+String(e); try{AndroidAutofill.notifyResult(msg)}catch(_){} return msg; }
+        })()
         """.trimIndent()
-        w.evaluateJavascript(script, null)
+        w.evaluateJavascript(script) { result ->
+            val message = result?.trim('"')?.replace("\\n", " ")
+            if (!message.isNullOrBlank() && message != "null") {
+                runOnUiThread { Toast.makeText(this, message, Toast.LENGTH_LONG).show() }
+            }
+        }
     }
-
     override fun onBackPressed() {
         val w = webView
         if (w != null && w.canGoBack()) w.goBack() else { webView = null; showHome() }
