@@ -85,7 +85,7 @@ class MainActivity : Activity() {
         val content = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL; setPadding(18, 8, 18, 24) }
         editorContainer = content
         scroll.addView(content)
-        root.addView(scroll, LinearLayout.LayoutParams(0, 0, 1f))
+        root.addView(scroll, LinearLayout.LayoutParams(-1, 0, 1f))
         val saved = readData()
         val general = saved.optJSONObject("general") ?: JSONObject()
         content.addView(section("General Details"))
