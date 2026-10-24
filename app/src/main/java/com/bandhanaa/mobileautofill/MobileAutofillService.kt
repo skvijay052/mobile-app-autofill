@@ -65,8 +65,8 @@ class MobileAutofillService : AutofillService() {
                 return
             }
 
-            val presentation = RemoteViews(packageName, android.R.layout.simple_list_item_1).apply {
-                setTextViewText(android.R.id.text1, "Fill saved details")
+            val presentation = RemoteViews(packageName, R.layout.autofill_dataset_item).apply {
+                setTextViewText(R.id.text1, "Fill saved details")
             }
             val datasetBuilder = Dataset.Builder(presentation)
             for (i in ids.indices) {
