@@ -54,6 +54,14 @@ class MainActivity : Activity() {
             textSize = 16f; setTextColor(0xFF263746.toInt()); setPadding(0, 8, 0, 22)
         })
         body.addView(button("Save / Edit Details") { showEditor() }, LinearLayout.LayoutParams(-1, -2).apply { bottomMargin = 12 })
+        body.addView(button("Enable Android Autofill Service") {
+            try {
+                startActivity(android.content.Intent(android.provider.Settings.ACTION_REQUEST_SET_AUTOFILL_SERVICE,
+                    android.net.Uri.parse("package:" + packageName)))
+            } catch (_: Exception) {
+                startActivity(android.content.Intent(android.provider.Settings.ACTION_SETTINGS))
+            }
+        }, LinearLayout.LayoutParams(-1, -2).apply { bottomMargin = 12 })
         body.addView(button("Open TTD Dashboard") { showTtd() }, LinearLayout.LayoutParams(-1, -2).apply { bottomMargin = 12 })
         body.addView(TextView(this).apply {
             text = "Privacy: details are stored locally on this device. This app does not submit bookings automatically."
