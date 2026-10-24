@@ -185,55 +185,63 @@ class MainActivity : Activity() {
         val w = webView ?: return
         val script = """
         (async function(){
-          const data = JSON.parse(AndroidAutofill.getData() || '{}');
-          const g = data.general || {};
-          const sleep = ms => new Promise(r => setTimeout(r, ms));
-          const setValue = (el, value) => {
-            if (!el || value == null || String(value).trim() === '') return false;
-            const proto = el instanceof HTMLTextAreaElement ? HTMLTextAreaElement.prototype : HTMLInputElement.prototype;
-            const setter = Object.getOwnPropertyDescriptor(proto, 'value')?.set;
-            if (setter) setter.call(el, String(value)); else el.value = String(value);
-            el.dispatchEvent(new Event('input', {bubbles:true}));
-            el.dispatchEvent(new Event('change', {bubbles:true}));
-            el.dispatchEvent(new Event('blur', {bubbles:true}));
-            return true;
-          };
-          const first = name => document.querySelector('[name="'+name+'"]');
-          let filled = 0;
-          for (const k of ['pilgrimEmail','pilgrimCity','pilgrimState','pilgrimCountry','pilgrimPincode']) if(setValue(first(k),g[k])) filled++;
-          const pilgrims = data.pilgrims || [];
-          const sections = Array.from(document.querySelectorAll('.pilDetails_mainContainer__HPFSL'));
-          async function chooseCustom(input, wanted) {
-            if (!input || !wanted) return false;
-            for(let tries=0; tries<20 && (input.disabled || !input.isConnected); tries++) await sleep(250);
-            if(input.disabled) return false;
-            input.click();
-            input.dispatchEvent(new MouseEvent('mousedown',{bubbles:true}));
-            await sleep(350);
-            const candidates = Array.from(document.querySelectorAll('li'));
-            const option = candidates.find(li => li.textContent.trim().toLowerCase() === String(wanted).trim().toLowerCase());
-            if(!option) return false;
-            option.click();
-            option.dispatchEvent(new MouseEvent('mouseup',{bubbles:true}));
-            await sleep(350);
-            return input.value.trim().toLowerCase() === String(wanted).trim().toLowerCase();
-          }
-          for(let i=0; i<Math.min(sections.length,pilgrims.length); i++){
-            const sec=sections[i], p=pilgrims[i]||{};
-            if(setValue(sec.querySelector('[name="name"]'),p.name)) filled++;
-            if(setValue(sec.querySelector('[name="age"]'),p.age)) filled++;
-            const gender=sec.querySelector('[name="gender"]');
-            if(await chooseCustom(gender,p.gender)) filled++;
-            const idType=sec.querySelector('[name="idType"]');
-            if(idType && idType.disabled){
-              for(let n=0;n<20 && idType.disabled;n++) await sleep(250);
+          try {
+            const data = JSON.parse(AndroidAutofill.getData() || "{}");
+            const g = data.general || {};
+            const pilgrims = data.pilgrims || [];
+            const sleep = ms => new Promise(resolve => setTimeout(resolve, ms));
+            const all = name => Array.from(document.querySelectorAll("[name=\"" + name + "\"]"));
+            const setValue = (el, value) => {
+              if (!el || value == null || String(value).trim() === "" || el.disabled || !el.isConnected) return false;
+              const text = String(value).trim();
+              if (el instanceof HTMLSelectElement) {
+                const opt = Array.from(el.options).find(o => o.text.trim().toLowerCase() === text.toLowerCase() || o.value.trim().toLowerCase() === text.toLowerCase());
+                if (!opt) return false;
+                el.value = opt.value;
+              } else {
+                const proto = el instanceof HTMLTextAreaElement ? HTMLTextAreaElement.prototype : HTMLInputElement.prototype;
+                const setter = Object.getOwnPropertyDescriptor(proto, "value")?.set;
+                if (setter) setter.call(el, text); else el.value = text;
+              }
+              el.dispatchEvent(new Event("input", {bubbles:true}));
+              el.dispatchEvent(new Event("change", {bubbles:true}));
+              return true;
+            };
+            let filled = 0;
+            for (const key of ["pilgrimEmail","pilgrimCity","pilgrimState","pilgrimCountry","pilgrimPincode"]) if (setValue(all(key)[0], g[key])) filled++;
+            async function chooseCustom(input, wanted) {
+              if (!input || !wanted) return false;
+              for (let n=0; n<20 && input.disabled; n++) await sleep(250);
+              if (input.disabled) return false;
+              input.click(); input.dispatchEvent(new MouseEvent("mousedown",{bubbles:true})); input.focus();
+              await sleep(400);
+              const target = String(wanted).trim().toLowerCase();
+              const option = Array.from(document.querySelectorAll("li,[role=option],option")).find(el => el.textContent.trim().toLowerCase() === target);
+              if (!option) return false;
+              option.click(); option.dispatchEvent(new MouseEvent("mouseup",{bubbles:true})); await sleep(300);
+              return String(input.value || "").trim().toLowerCase() === target;
             }
-            if(await chooseCustom(idType,p.idType)) filled++;
-            const idNumber=sec.querySelector('[name="idNumber"]');
-            for(let n=0;n<20 && idNumber && idNumber.disabled;n++) await sleep(250);
-            if(setValue(idNumber,p.idNumber)) filled++;
-          }
-          AndroidAutofill.notifyResult(filled ? ('Autofill attempted: '+filled+' field(s). Please review every field and dropdown.') : 'No fields were filled. Open the actual TTD pilgrim details form first.');
+            const sectionNodes = Array.from(document.querySelectorAll("[class*=pilDetails_mainContainer], [class*=pilgrimDetails], [class*=pilgrim-details]"));
+            const groups = sectionNodes.filter(el => el.querySelector && el.querySelector("[name=\"name\"]"));
+            for (let i=0; i<Math.min(4,pilgrims.length); i++) {
+              const p = pilgrims[i] || {};
+              const nameNode = all("name")[i];
+              const scope = groups[i] || (nameNode ? (nameNode.closest("[class*=pilDetails_mainContainer], [class*=pilgrimDetails], [class*=pilgrim-details]") || nameNode.parentElement?.parentElement?.parentElement || document) : document);
+              for (const key of ["name","age"]) {
+                const nodes = scope === document ? all(key) : Array.from(scope.querySelectorAll("[name=\"" + key + "\"]"));
+                if (setValue(nodes[0] || all(key)[i], p[key])) filled++;
+              }
+              const genders = scope === document ? all("gender") : Array.from(scope.querySelectorAll("[name=\"gender\"]"));
+              if (await chooseCustom(genders[0] || all("gender")[i], p.gender)) filled++;
+              const types = scope === document ? all("idType") : Array.from(scope.querySelectorAll("[name=\"idType\"]"));
+              const idType = types[0] || all("idType")[i];
+              if (idType && idType.tagName === "SELECT" && setValue(idType,p.idType)) filled++;
+              else if (await chooseCustom(idType,p.idType)) filled++;
+              const numbers = scope === document ? all("idNumber") : Array.from(scope.querySelectorAll("[name=\"idNumber\"]"));
+              if (setValue(numbers[0] || all("idNumber")[i],p.idNumber)) filled++;
+            }
+            AndroidAutofill.notifyResult(filled ? ("Filled or selected " + filled + " field(s). Please review before continuing.") : "No matching fields found. Navigate to the actual TTD Pilgrim Details page, wait for it to load, then tap Fill Form again.");
+          } catch (e) { AndroidAutofill.notifyResult("Fill Form error: " + String(e)); }
         })();
         """.trimIndent()
         w.evaluateJavascript(script, null)
