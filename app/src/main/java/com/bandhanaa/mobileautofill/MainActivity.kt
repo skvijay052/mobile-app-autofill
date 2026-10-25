@@ -187,136 +187,189 @@ class MainActivity : Activity() {
             Toast.makeText(this, "TTD page is not open. Tap Open TTD Dashboard first.", Toast.LENGTH_LONG).show()
             return
         }
-        Toast.makeText(this, "Checking the current TTD page…", Toast.LENGTH_SHORT).show()
+        Toast.makeText(this, "Inspecting TTD form…", Toast.LENGTH_SHORT).show()
         val script = """
-        (function() {
-          try {
-            if (!window.AndroidAutofill) {
-              return JSON.stringify({ok:false, error:"Android bridge unavailable", url:location.href});
+        (async function() {
+          const sleep = ms => new Promise(resolve => setTimeout(resolve, ms));
+          const norm = s => String(s || "").toLowerCase().replace(/[^a-z0-9]/g, "");
+          const roots = () => {
+            const result = [document];
+            document.querySelectorAll("iframe").forEach(frame => {
+              try { if (frame.contentDocument) result.push(frame.contentDocument); } catch (_) {}
+            });
+            return result;
+          };
+          const visible = el => {
+            try { return !!(el.getClientRects().length) && getComputedStyle(el).visibility !== "hidden"; }
+            catch (_) { return true; }
+          };
+          const elements = () => roots().flatMap(root =>
+            Array.from(root.querySelectorAll("input,textarea,select,[role=combobox],[aria-haspopup=listbox],[contenteditable=true]"))
+          );
+          const attrs = el => [
+            el.name, el.id, el.getAttribute("autocomplete"), el.getAttribute("aria-label"),
+            el.getAttribute("placeholder"), el.getAttribute("data-testid"),
+            el.getAttribute("formcontrolname"), el.getAttribute("ng-reflect-name"),
+            el.getAttribute("title"), el.getAttribute("name")
+          ].map(norm);
+          const aliases = {
+            pilgrimEmail:["pilgrimemail","email","emailaddress"],
+            pilgrimCity:["pilgrimcity","city"],
+            pilgrimState:["pilgrimstate","state","statename"],
+            pilgrimCountry:["pilgrimcountry","country","countryname"],
+            pilgrimPincode:["pilgrimpincode","pincode","postalcode","zipcode"],
+            name:["pilgrimname","fullname","name"],
+            age:["age","pilgrimage"],
+            gender:["gender","sex"],
+            idType:["idtype","photoidproof","idproof","photoidtype","identityproof"],
+            idNumber:["idnumber","photoidnumber","idproofnumber","identitynumber"]
+          };
+          const find = key => {
+            const els = elements();
+            const wanted = aliases[key] || [norm(key)];
+            const exact = els.filter(el => [el.name,el.id,el.getAttribute("formcontrolname"),el.getAttribute("ng-reflect-name")]
+              .some(v => wanted.includes(norm(v))));
+            if (exact.length) return exact;
+            return els.filter(el => attrs(el).some(a => wanted.some(w => a === w || (w.length > 3 && a.includes(w)))));
+          };
+          const setValue = (el, raw) => {
+            if (!el || raw == null || String(raw).trim() === "" || el.disabled || el.readOnly) return false;
+            const value = String(raw).trim();
+            if (el.tagName === "SELECT") {
+              const options = Array.from(el.options);
+              const option = options.find(o => norm(o.textContent) === norm(value) || norm(o.value) === norm(value)) ||
+                options.find(o => norm(o.textContent).includes(norm(value)) || norm(value).includes(norm(o.textContent)));
+              if (!option) return false;
+              el.value = option.value;
+            } else if (el.isContentEditable) {
+              el.textContent = value;
+            } else {
+              const proto = el.tagName === "TEXTAREA" ? HTMLTextAreaElement.prototype : HTMLInputElement.prototype;
+              const setter = Object.getOwnPropertyDescriptor(proto, "value")?.set;
+              if (setter) setter.call(el, value); else el.value = value;
             }
+            el.dispatchEvent(new Event("input", {bubbles:true}));
+            el.dispatchEvent(new Event("change", {bubbles:true}));
+            el.dispatchEvent(new Event("blur", {bubbles:true}));
+            return String(el.value ?? el.textContent ?? "").trim() === value;
+          };
+          const getOptions = () => roots().flatMap(root => Array.from(root.querySelectorAll(
+            "li,[role=option],option,[role=menuitem],.dropdown-item,.mat-option,.ant-select-item-option,[data-value]"
+          )).filter(visible));
+          const choose = async (el, raw) => {
+            if (!el || raw == null || String(raw).trim() === "" || el.disabled) return false;
+            const value = String(raw).trim();
+            if (el.tagName === "SELECT") return setValue(el, value);
+            el.scrollIntoView({block:"center", inline:"nearest"});
+            el.focus?.();
+            el.click();
+            el.dispatchEvent(new MouseEvent("mousedown", {bubbles:true}));
+            for (let attempt = 0; attempt < 8; attempt++) {
+              await sleep(120);
+              const opts = getOptions();
+              const wanted = norm(value);
+              const option = opts.find(x => norm(x.innerText || x.textContent) === wanted) ||
+                opts.find(x => norm(x.innerText || x.textContent).includes(wanted) || wanted.includes(norm(x.innerText || x.textContent)));
+              if (option) {
+                option.click();
+                option.dispatchEvent(new MouseEvent("mouseup", {bubbles:true}));
+                option.dispatchEvent(new Event("input", {bubbles:true}));
+                option.dispatchEvent(new Event("change", {bubbles:true}));
+                await sleep(250);
+                const shown = norm(el.value || el.getAttribute("value") || el.textContent);
+                return shown === wanted || shown.includes(wanted) || wanted.includes(shown);
+              }
+            }
+            return false;
+          };
+          const waitEnabled = async key => {
+            for (let i=0; i<20; i++) {
+              const target = find(key)[0];
+              if (target && !target.disabled && !target.readOnly) return target;
+              await sleep(150);
+            }
+            return find(key)[0] || null;
+          };
+          try {
+            if (!window.AndroidAutofill) throw new Error("Android bridge unavailable");
             const data = JSON.parse(AndroidAutofill.getData() || "{}");
             const general = data.general || {};
             const pilgrims = Array.isArray(data.pilgrims) ? data.pilgrims : [];
-            const norm = s => String(s || "").toLowerCase().replace(/[^a-z0-9]/g, "");
-            const allRoots = [document];
-            try {
-              document.querySelectorAll("iframe").forEach(frame => {
-                try { if (frame.contentDocument) allRoots.push(frame.contentDocument); } catch (_) {}
-              });
-            } catch (_) {}
-            const allElements = () => allRoots.flatMap(root => Array.from(root.querySelectorAll("input,textarea,select,[role=combobox],[aria-haspopup=listbox]")));
-            const fieldKey = el => norm([
-              el.name, el.id, el.getAttribute("autocomplete"), el.getAttribute("aria-label"),
-              el.getAttribute("placeholder"), el.getAttribute("data-testid"),
-              el.getAttribute("formcontrolname"), el.getAttribute("ng-reflect-name"),
-              el.getAttribute("title"), el.getAttribute("name")
-            ].join(" "));
-            const find = key => {
-              const k = norm(key);
-              const els = allElements();
-              const exact = els.filter(el => [el.name, el.id, el.getAttribute("formcontrolname"), el.getAttribute("ng-reflect-name")].some(v => norm(v) === k));
-              if (exact.length) return exact;
-              const aliases = {
-                pilgrimEmail:["email","emailaddress","pilgrimemail"],
-                pilgrimCity:["city","pilgrimcity"],
-                pilgrimState:["state","statename","pilgrimstate"],
-                pilgrimCountry:["country","countryname","pilgrimcountry"],
-                pilgrimPincode:["pincode","postalcode","zipcode","pilgrimpincode"],
-                name:["name","pilgrimname","fullname"],
-                age:["age","pilgrimage"],
-                gender:["gender","sex"],
-                idType:["idtype","photoidproof","idproof","photoidtype","identityproof"],
-                idNumber:["idnumber","photoidnumber","idproofnumber","identitynumber"]
-              };
-              const names = (aliases[key] || [k]).map(norm);
-              return els.filter(el => names.some(n => fieldKey(el).includes(n)));
-            };
-            const setVal = (el, val) => {
-              if (!el || val == null || String(val).trim()==="" || el.disabled || el.readOnly) return false;
-              const value = String(val).trim();
-              if (el.tagName === "SELECT") {
-                const opt = Array.from(el.options).find(o => norm(o.text) === norm(value) || norm(o.value) === norm(value));
-                if (!opt) return false;
-                el.value = opt.value;
-              } else {
-                const proto = el.tagName === "TEXTAREA" ? HTMLTextAreaElement.prototype : HTMLInputElement.prototype;
-                const setter = Object.getOwnPropertyDescriptor(proto, "value")?.set;
-                if (setter) setter.call(el, value); else el.value = value;
-              }
-              el.dispatchEvent(new Event("input", {bubbles:true}));
-              el.dispatchEvent(new Event("change", {bubbles:true}));
-              el.dispatchEvent(new Event("blur", {bubbles:true}));
-              return true;
-            };
+            const report = [];
             let filled = 0;
-            const matched = [];
             for (const key of ["pilgrimEmail","pilgrimCity","pilgrimState","pilgrimCountry","pilgrimPincode"]) {
-              const els = find(key);
-              if (els.length) matched.push(key + " (" + els.length + ")");
-              if (setVal(els[0], general[key])) filled++;
+              const el = find(key)[0];
+              const ok = setValue(el, general[key]);
+              if (ok) filled++;
+              if (general[key]) report.push(key + ": " + (ok ? "filled" : (el ? "not editable / value mismatch" : "not found")));
             }
-            const choose = (el, val) => {
-              if (!el || !val || el.disabled) return false;
-              const value = String(val).trim();
-              el.scrollIntoView({block:"center"});
-              el.click();
-              el.dispatchEvent(new MouseEvent("mousedown", {bubbles:true}));
-              const roots = allRoots;
-              const opts = roots.flatMap(root => Array.from(root.querySelectorAll("li,[role=option],option,[role=menuitem],.dropdown-item,.mat-option,.ant-select-item-option")));
-              const wanted = norm(value);
-              const opt = opts.find(x => norm(x.innerText || x.textContent) === wanted) ||
-                          opts.find(x => norm(x.innerText || x.textContent).includes(wanted));
-              if (!opt) return false;
-              opt.click();
-              opt.dispatchEvent(new MouseEvent("mouseup", {bubbles:true}));
-              opt.dispatchEvent(new Event("change", {bubbles:true}));
-              return true;
-            };
-            for (let i=0; i<Math.min(4,pilgrims.length); i++) {
+            const count = Math.min(4, pilgrims.length);
+            for (let i=0; i<count; i++) {
               const p = pilgrims[i] || {};
-              for (const key of ["name","age","gender","idType","idNumber"]) {
-                const els = find(key);
-                if (els.length && !matched.includes(key + " (" + els.length + ")")) matched.push(key + " (" + els.length + ")");
-                if (key === "name" && setVal(els[i], p.name)) filled++;
-                else if (key === "age" && setVal(els[i], p.age)) filled++;
-                else if (key === "gender" && choose(els[i], p.gender)) filled++;
-                else if (key === "idType" && (els[i]?.tagName === "SELECT" ? setVal(els[i], p.idType) : choose(els[i], p.idType))) filled++;
-                else if (key === "idNumber" && setVal(els[i], p.idNumber)) filled++;
+              for (const key of ["name","age"]) {
+                const el = find(key)[i];
+                const ok = setValue(el, p[key]);
+                if (ok) filled++;
+                if (p[key]) report.push("Pilgrim " + (i+1) + " " + key + ": " + (ok ? "filled" : (el ? "failed" : "not found")));
+              }
+              const genderEl = find("gender")[i];
+              if (p.gender) {
+                const ok = await choose(genderEl, p.gender);
+                if (ok) filled++;
+                report.push("Pilgrim " + (i+1) + " gender: " + (ok ? "selected" : (genderEl ? "option not selected" : "control not found")));
+              }
+              const idEl = find("idType")[i];
+              if (p.idType) {
+                const ok = await choose(idEl, p.idType);
+                if (ok) filled++;
+                report.push("Pilgrim " + (i+1) + " photo ID type: " + (ok ? "selected" : (idEl ? "option not selected" : "control not found")));
+                await sleep(350);
+              }
+              if (p.idNumber) {
+                const el = await waitEnabled("idNumber");
+                const targets = find("idNumber");
+                const target = targets[i] || el;
+                const ok = setValue(target, p.idNumber);
+                if (ok) filled++;
+                report.push("Pilgrim " + (i+1) + " ID number: " + (ok ? "filled" : (target ? (target.disabled ? "still disabled after selecting ID type" : "failed") : "field not found")));
               }
             }
-            const detected = allElements().map(el => ({
+            const detected = elements().slice(0,60).map(el => ({
               tag:el.tagName, id:el.id || "", name:el.name || "",
               placeholder:el.getAttribute("placeholder") || "",
               aria:el.getAttribute("aria-label") || "",
-              type:el.type || ""
-            })).slice(0,50);
+              type:el.type || "", disabled:!!el.disabled, readOnly:!!el.readOnly
+            }));
             const result = {
-              ok: filled > 0, filled:filled, url:location.href,
-              matched:matched, inputCount:allElements().length,
-              detected:detected,
+              ok:filled > 0, filled, url:location.href, report,
+              inputCount:elements().length, detected,
               message: filled > 0
-                ? "Filled/selected " + filled + " field(s). Review all details before continuing."
-                : "No fields matched on this page. URL: " + location.href + ". Inputs found: " + allElements().length + ". Names/IDs: " + (detected.map(x => x.name || x.id || x.placeholder || x.aria || x.tag).join(", ") || "none") + ". Open the actual Pilgrim Details form and tap Fill Form again."
+                ? "Filled or selected " + filled + " field(s). Review details carefully. " + report.filter(x => /not found|failed|not selected|disabled|mismatch/i.test(x)).join("; ")
+                : "No fields were filled. URL: " + location.href + ". Detected controls: " +
+                  (detected.map(x => [x.name,x.id,x.placeholder,x.aria,x.tag].find(Boolean)).join(", ") || "none") +
+                  ". Open the actual Pilgrim Details form and try again."
             };
-            AndroidAutofill.notifyResult(result.message);
             return JSON.stringify(result);
-          } catch(e) {
-            const message = "Fill Form error: " + String(e && e.stack || e);
-            try { AndroidAutofill.notifyResult(message); } catch (_) {}
-            return JSON.stringify({ok:false,error:message});
+          } catch (e) {
+            return JSON.stringify({ok:false,error:String(e && e.stack || e),message:"Fill Form error: " + String(e && e.message || e)});
           }
         })();
         """.trimIndent()
-        w.evaluateJavascript(script) { result ->
-            val decoded = result?.trim()?.removeSurrounding("\"")?.replace("\\\"", "\"")?.replace("\\\\n", " ")
-            if (!decoded.isNullOrBlank() && decoded != "null" && decoded != "undefined") {
-                runOnUiThread {
-                    val display = try {
-                        val json = JSONObject(decoded)
-                        json.optString("message", json.optString("error", decoded))
-                    } catch (_: Exception) { decoded }
-                    Toast.makeText(this, display, Toast.LENGTH_LONG).show()
-                }
+        w.evaluateJavascript(script) { raw ->
+            runOnUiThread {
+                val decoded = try {
+                    val value = org.json.JSONTokener(raw ?: "null").nextValue()
+                    if (value is String) value else value.toString()
+                } catch (_: Exception) { raw ?: "" }
+                val display = try {
+                    val json = JSONObject(decoded)
+                    val message = json.optString("message", json.optString("error", decoded))
+                    val details = json.optJSONArray("report")
+                    if (details != null && details.length() > 0) {
+                        message + "\n\n" + (0 until details.length()).joinToString("\n") { details.optString(it) }
+                    } else message
+                } catch (_: Exception) { decoded }
+                Toast.makeText(this, display.ifBlank { "No response from the page. Try reloading TTD." }, Toast.LENGTH_LONG).show()
             }
         }
     }
