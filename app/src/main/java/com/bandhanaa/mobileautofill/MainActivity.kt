@@ -349,29 +349,21 @@ class MainActivity : Activity() {
                   (detected.map(x => [x.name,x.id,x.placeholder,x.aria,x.tag].find(Boolean)).join(", ") || "none") +
                   ". Open the actual Pilgrim Details form and try again."
             };
+            const detailsText = report.join("\\n");
+            try {
+              AndroidAutofill.notifyResult(result.message + (detailsText ? "\\n\\n" + detailsText : ""));
+            } catch (_) {}
             return JSON.stringify(result);
           } catch (e) {
-            return JSON.stringify({ok:false,error:String(e && e.stack || e),message:"Fill Form error: " + String(e && e.message || e)});
+            const message = "Fill Form error: " + String(e && e.message || e);
+            try { AndroidAutofill.notifyResult(message); } catch (_) {}
+            return JSON.stringify({ok:false,error:String(e && e.stack || e),message:message});
           }
         })();
         """.trimIndent()
-        w.evaluateJavascript(script) { raw ->
-            runOnUiThread {
-                val decoded = try {
-                    val value = org.json.JSONTokener(raw ?: "null").nextValue()
-                    if (value is String) value else value.toString()
-                } catch (_: Exception) { raw ?: "" }
-                val display = try {
-                    val json = JSONObject(decoded)
-                    val message = json.optString("message", json.optString("error", decoded))
-                    val details = json.optJSONArray("report")
-                    if (details != null && details.length() > 0) {
-                        message + "\n\n" + (0 until details.length()).joinToString("\n") { details.optString(it) }
-                    } else message
-                } catch (_: Exception) { decoded }
-                Toast.makeText(this, display.ifBlank { "No response from the page. Try reloading TTD." }, Toast.LENGTH_LONG).show()
-            }
-        }
+        // IMPORTANT: WebView evaluateJavascript does not await the Promise returned by an async IIFE.
+        // The JS bridge above reports the completed result after all asynchronous dropdown waits.
+        w.evaluateJavascript(script, null)
     }
     override fun onBackPressed() {
         val w = webView
